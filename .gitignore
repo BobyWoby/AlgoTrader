@@ -1,2 +1,6 @@
 .env
 build
+.poorenv
+clion-build
+.idea
+
