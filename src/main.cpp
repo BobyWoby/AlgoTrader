@@ -267,10 +267,10 @@ void setup(std::string env) {
     headers.headers["Accept"] = "application/json";
 
     if (overwrite && log_filepath != "") {
-        logfile =  std::ofstream(log_filepath);
+        logfile = std::ofstream(log_filepath);
         logfile << "";
-    }else if(log_filepath != ""){
-        logfile =  std::ofstream(log_filepath, std::ios::app);
+    } else if (log_filepath != "") {
+        logfile = std::ofstream(log_filepath, std::ios::app);
     }
     ctx.load_verify_file("/etc/ssl/cert.pem");
     ctx.set_default_verify_paths();
@@ -367,6 +367,29 @@ void perform_action(
     }
 }
 
+std::time_t parseISO(std::string iso_str) {
+    std::time_t out;
+    struct std::tm tm;
+    std::istringstream ss(iso_str.substr(0, 19).c_str());
+    ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
+    if (ss.fail()) {
+        std::cerr << "Failed to parse string: " << iso_str.substr(0, 19)
+                  << "\n";
+    }
+
+    out = timegm(&tm);
+
+    std::string offset = iso_str.substr(19);
+    int offset_sign = (offset[0] == '+') ? 1 : -1;
+    int offset_hours = std::stoi(offset.substr(1, 2));
+    int offset_minutes = std::stoi(offset.substr(4, 2));
+    int offset_seconds =
+        offset_sign * (offset_hours * 3600 + offset_minutes * 60);
+
+    out -= offset_seconds;
+    return out;
+}
+
 int main(int argc, char* argv[]) {
     if (argc != 2) {
         std::cerr << "You need to input an .env file!";
@@ -416,24 +439,7 @@ int main(int argc, char* argv[]) {
             is_open = json["is_open"].GetBool();
             std::string time_str = json["next_close"].GetString();
 
-            struct std::tm tm;
-            std::istringstream ss(time_str.substr(0, 19).c_str());
-            ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
-            if (ss.fail()) {
-                std::cerr << "Failed to parse string: "
-                          << time_str.substr(0, 19) << "\n";
-            }
-
-            next_close = timegm(&tm);
-
-            std::string offset = time_str.substr(19);
-            int offset_sign = (offset[0] == '+') ? 1 : -1;
-            int offset_hours = std::stoi(offset.substr(1, 2));
-            int offset_minutes = std::stoi(offset.substr(4, 2));
-            int offset_seconds =
-                offset_sign * (offset_hours * 3600 + offset_minutes * 60);
-
-            next_close -= offset_seconds;
+            next_close = parseISO(time_str);
 
             auto now = std::chrono::system_clock::now();
             std::time_t now_t = std::chrono::system_clock::to_time_t(now);
@@ -455,6 +461,15 @@ int main(int argc, char* argv[]) {
             std::cout << "next close str: " << time_str << "\n";
             std::cout << "next open: " << json["next_open"].GetString()
                       << "\n\n";
+
+            auto next_open = parseISO(json["next_open"].GetString());
+            int sleep_for =
+                std::difftime(next_open, std::chrono::system_clock::to_time_t(
+                                             std::chrono::system_clock::now()));
+            if (!is_open) {
+                std::cout << "Sleeping for: "  <<  sleep_for <<"\n";
+                std::this_thread::sleep_for(sleep_for * 1s);
+            }
 
         } else {
             if (std::difftime(std::chrono::system_clock::to_time_t(
