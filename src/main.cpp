@@ -26,30 +26,33 @@
 // Base URL
 // 33 chars
 constexpr char APCA_API_BASE_URL[] = "https://paper-api.alpaca.markets/";
+constexpr char LIVE_APCA_API_BASE_URL[] = "https://api.alpaca.markets/";
 
 // POST  Request  with data in body
 // 43 chars
 constexpr char ORDER_URL[] = "https://paper-api.alpaca.markets/v2/orders";
+constexpr char LIVE_ORDER_URL[] = "https://api.alpaca.markets/v2/orders";
 
 // GET Request with data in url(append /${stocks}/bars)
 // 43 chars
 constexpr char BAR_URL[] = "https://data.alpaca.markets/v2/stocks/";
 
 // GET Request, nothing else  needed
-constexpr char ACCT_URL[] = "https://paper-api.alpaca.markets/v2/account";
+constexpr char ACCT_URL[] = "https://api.alpaca.markets/v2/account";
+constexpr char LIVE_ACCT_URL[] = "https://api.alpaca.markets/v2/account";
 
-// GET Request, just add the symbol at the end
+// GET Request, just add the symbol at the end, sell with a DELETE request
 constexpr char POSITION_URL[] =
     "https://paper-api.alpaca.markets/v2/positions/";
+constexpr char LIVE_POSITION_URL[] =
+    "https://api.alpaca.markets/v2/positions/";
 
-// DELETE Request, just add the symbol to the end
-constexpr char SELL_URL[] = "https://paper-api.alpaca.markets/v2/positions/";
 
 // https://data.alpaca.markets
 std::string APCA_KEY_ID;
 std::string APCA_SECRET_KEY;
 std::string log_filepath;
-const std::vector<std::string> symbols{"AAPL", "MSFT", "SPY"};
+std::vector<std::string> symbols{"AAPL", "MSFT", "SPY"};
 std::map<std::string, bool> bought_symbols;
 
 boost::asio::io_context io;
@@ -57,6 +60,8 @@ boost::asio::ssl::context ctx(boost::asio::ssl::context::sslv23);
 
 typedef enum { BUY, SELL, HOLD } StockAction;
 std::ofstream logfile;
+bool live=false;
+
 
 Headers headers;
 std::string next_batch(const std::string next_page_token) {
@@ -195,6 +200,9 @@ void logStock(std::string headline, std::string symbol, std::string message) {
     }
 }
 
+// TODO: maybe add in a majority vote with some other indicators like RSI and
+// MACD Also available could be parabolic SAR, or generally just stuff from the
+// trend section of the wikipedia page for technical indicators
 StockAction eval(std::string symbol) {
     Client c(io, ctx);
     std::vector<std::string> data;
@@ -247,6 +255,7 @@ void setup(std::string env) {
     std::string line;
     bool overwrite = false;
     while (std::getline(file, line)) {
+        if(line.at(0) == '#') continue;
         auto field = split(line, " ");
         if (field.at(0) == "APCA_KEY_ID") {
             APCA_KEY_ID = field.at(1);
@@ -256,6 +265,10 @@ void setup(std::string env) {
             log_filepath = field.at(1);
         } else if (field.at(0) == "OVERWRITE") {
             overwrite = true;
+        } else if (field.at(0) == "SYMBOL") {
+            symbols.push_back(field.at(1));
+        } else if(field.at(0) == "LIVE"){
+            live = true;
         }
     }
     if (APCA_KEY_ID == "" || APCA_SECRET_KEY == "") {
@@ -283,7 +296,8 @@ void perform_action(
     const std::vector<std::pair<std::string, StockAction>>& symbol_buf) {
     std::cout << "action list size: " << symbol_buf.size() << "\n";
     Client acct_client(io, ctx);
-    Response acct = acct_client.fetch(ACCT_URL, "GET", headers);
+    std::string url = live ? LIVE_ACCT_URL : ACCT_URL;
+    Response acct = acct_client.fetch(url, "GET", headers);
     rapidjson::Document acct_json;
     acct_json.Parse(acct.body.c_str());
     float cash =
@@ -307,7 +321,8 @@ void perform_action(
             bought_symbols[symbol.first] = false;
             // close the position
             Client sell_client(io, ctx);
-            sell_client.fetch(POSITION_URL + symbol.first, "DELETE", headers);
+            std::string url = live ? LIVE_POSITION_URL : POSITION_URL;
+            sell_client.fetch(url + symbol.first, "DELETE", headers);
         }
     }
     // buy all  symbols needed here
@@ -353,8 +368,9 @@ void perform_action(
 
                 Client buy_client(io, ctx);
                 // buy_client.debug_mode = true;
+                std::string url = live? LIVE_ORDER_URL : ORDER_URL;
                 Response buy_res = buy_client.fetch(
-                    ORDER_URL, "POST", buy_headers, strbuf.GetString());
+                    url, "POST", buy_headers, strbuf.GetString());
                 if (buy_res.status == StatusCode::OK) {
                     bought_symbols[sym] = true;
                     logStock("Buy Report", sym, "");
@@ -467,7 +483,7 @@ int main(int argc, char* argv[]) {
                 std::difftime(next_open, std::chrono::system_clock::to_time_t(
                                              std::chrono::system_clock::now()));
             if (!is_open) {
-                std::cout << "Sleeping for: "  <<  sleep_for <<"\n";
+                std::cout << "Sleeping for: " << sleep_for << "\n";
                 std::this_thread::sleep_for(sleep_for * 1s);
             }
 
