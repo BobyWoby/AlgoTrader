@@ -44,9 +44,7 @@ constexpr char LIVE_ACCT_URL[] = "https://api.alpaca.markets/v2/account";
 // GET Request, just add the symbol at the end, sell with a DELETE request
 constexpr char POSITION_URL[] =
     "https://paper-api.alpaca.markets/v2/positions/";
-constexpr char LIVE_POSITION_URL[] =
-    "https://api.alpaca.markets/v2/positions/";
-
+constexpr char LIVE_POSITION_URL[] = "https://api.alpaca.markets/v2/positions/";
 
 // https://data.alpaca.markets
 std::string APCA_KEY_ID;
@@ -60,8 +58,7 @@ boost::asio::ssl::context ctx(boost::asio::ssl::context::sslv23);
 
 typedef enum { BUY, SELL, HOLD } StockAction;
 std::ofstream logfile;
-bool live=false;
-
+bool live = false;
 
 Headers headers;
 std::string next_batch(const std::string next_page_token) {
@@ -83,6 +80,45 @@ float SMA(std::shared_ptr<std::vector<float>> closing_prices) {
     }
     return sum / closing_prices->size();
 }
+
+// returns the percentage change of SPY from 40 days ago to now
+float index_data(const std::string start_date, const std::string end_date) {
+    std::string request = BAR_URL;
+    request += "SPY/bars?timeframe=1D&start=" + start_date +
+               "&end=" + end_date +
+               "&limit=1000&adjustment=raw&feed=iex&sort=desc";
+    Client c = Client(io, ctx);
+    Headers headers;
+    headers.headers["Apca-Api-Key-Id"] = APCA_KEY_ID;
+    headers.headers["Apca-Api-Secret-Key"] = APCA_SECRET_KEY;
+    headers.headers["Accept"] = "application/json";
+    Response response = c.fetch(request, "GET", headers);
+
+    if (response.status != StatusCode::OK) {
+        std::cout << "Reqeust: " << request << "\n";
+        std::cout << "Status Code: " << (int)response.status << "\n";
+        std::cerr << "Error fetching SPY: " << response.body << "\n";
+        return 0;
+    }
+    std::string jsondata = response.body;
+    rapidjson::Document tmp;
+    tmp.Parse(jsondata.c_str());
+    float past = tmp["bars"][0]["c"].GetFloat();
+
+    if (!tmp.IsObject()) {
+        std::cout << "idfk atp\n";
+        std::cout << escape_string(jsondata) << "\n";
+    }
+    Client c2 = Client(io, ctx);
+    request = BAR_URL;
+    request += "/v2/stocks/SPY/bars/latest";
+    response = c2.fetch(request, "GET", headers);
+    jsondata = response.body;
+    tmp.Parse(jsondata.c_str());
+    float present = tmp["bar"]["c"].GetFloat();
+    return present / past;
+}
+
 void fetch_data(std::vector<std::string>& res, const std::string symbol,
                 Client& client, const std::string start_date,
                 const std::string next_page_tok = "") {
@@ -200,20 +236,10 @@ void logStock(std::string headline, std::string symbol, std::string message) {
     }
 }
 
-// TODO: maybe add in a majority vote with some other indicators like RSI and
-// MACD Also available could be parabolic SAR, or generally just stuff from the
-// trend section of the wikipedia page for technical indicators
-StockAction eval(std::string symbol) {
-    Client c(io, ctx);
-    std::vector<std::string> data;
-    auto forty_days_ago = date_offset(40);
-    fetch_data(data, symbol, c, forty_days_ago);
-
+StockAction SMA_Eval(std::vector<std::string> data, std::string symbol) {
     float forty_SMA = SMA(closing_prices(40, data));
     float twenty_SMA = SMA(closing_prices(20, data));
-
     std::string s_forty = std::to_string(forty_SMA);
-
     std::string s_twenty = std::to_string(twenty_SMA);
 
     std::string str = "40 day SMA: " + s_forty +
@@ -221,9 +247,77 @@ StockAction eval(std::string symbol) {
                       "20 day SMA: " +
                       s_twenty;
     logStock("Checking SMA", symbol, str);
+    if (twenty_SMA > forty_SMA && !bought_symbols[symbol]) {
+        return BUY;
+    } else if (forty_SMA > twenty_SMA) {
+        return SELL;
+    }
+    return HOLD;
+}
+
+StockAction RSI_Eval(std::vector<std::string> data, std::string symbol, int period) {
+    std::shared_ptr<std::vector<float>> closers = closing_prices(period ,data);
+    std::vector<float> gains, losses;
+    for(int i = 1; i < closers->size(); i++){
+        if(closers->at(i) > closers->at(i-1)){
+            // gained
+            gains.push_back(closers->at(i) - closers->at(i-1));
+        }
+        else if(closers->at(i) < closers->at(i-1)){
+            // lost
+            losses.push_back(closers->at(i-1) - closers->at(i));
+        }
+    }
+    float sum = 0;
+    for(auto gain : gains){
+        sum += gain;
+    }
+    float avg_gains = sum / period;
+    sum = 0;
+    for(auto loss : losses){
+        sum += loss;
+    }
+    float avg_loss = sum / period;
+
+    float RSI = 100 - 100 / (1 + avg_gains / avg_loss);
+
+    if(RSI > 70){
+        return SELL;
+    }else if(RSI < 30){
+        return BUY;
+    }
+    return HOLD;
+
+}
+
+// TODO: maybe add in a majority vote with some other indicators like RSI and
+// MACD Also available could be parabolic SAR, or generally just stuff from the
+// trend section of the wikipedia page for technical indicators
+StockAction eval(std::string symbol) {
+    Client c(io, ctx);
+    std::vector<std::string> data;
+    auto forty_days_ago = date_offset(40);
+    auto thirty_nine = date_offset(39);
+    fetch_data(data, symbol, c, forty_days_ago);
+
+    // float index_strength = index_data(forty_days_ago, thirty_nine);
+
+    std::vector<StockAction> votes;
+    votes.push_back(SMA_Eval(data, symbol));
+    votes.push_back(RSI_Eval(data, symbol, 40));
+
+    // +1 if buy, -1 if sell
+    int votes_max = 0;
+    for (auto action : votes) {
+        if (action == BUY)
+            votes_max++;
+        else if (action == SELL)
+            votes_max--;
+    }
 
     Client cli(io, ctx);
-    if (twenty_SMA > forty_SMA && !bought_symbols[symbol]) {
+
+    if (votes_max > 0) {
         std::cout << "Running buy block\n";
         // when the short term  initially crosses  over the  long term, we  want
         // to buy the stock, as it will likely be an upward trend
@@ -241,7 +335,7 @@ StockAction eval(std::string symbol) {
 
         std::cout << "Finished buy block (already owned)\n";
         return HOLD;
-    } else if (forty_SMA > twenty_SMA) {
+    } else if (votes_max < 0) {
         std::cout << "Running sell block\n";
         // when the short term  initially crosses under the  long term, we  want
         // to sell the stock, as it will likely be an downward trend
@@ -255,7 +349,7 @@ void setup(std::string env) {
     std::string line;
     bool overwrite = false;
     while (std::getline(file, line)) {
-        if(line.at(0) == '#') continue;
+        if (line.at(0) == '#') continue;
         auto field = split(line, " ");
         if (field.at(0) == "APCA_KEY_ID") {
             APCA_KEY_ID = field.at(1);
@@ -267,7 +361,7 @@ void setup(std::string env) {
             overwrite = true;
         } else if (field.at(0) == "SYMBOL") {
             symbols.push_back(field.at(1));
-        } else if(field.at(0) == "LIVE"){
+        } else if (field.at(0) == "LIVE") {
             live = true;
         }
     }
@@ -368,9 +462,9 @@ void perform_action(
 
                 Client buy_client(io, ctx);
                 // buy_client.debug_mode = true;
-                std::string url = live? LIVE_ORDER_URL : ORDER_URL;
-                Response buy_res = buy_client.fetch(
-                    url, "POST", buy_headers, strbuf.GetString());
+                std::string url = live ? LIVE_ORDER_URL : ORDER_URL;
+                Response buy_res = buy_client.fetch(url, "POST", buy_headers,
+                                                    strbuf.GetString());
                 if (buy_res.status == StatusCode::OK) {
                     bought_symbols[sym] = true;
                     logStock("Buy Report", sym, "");
