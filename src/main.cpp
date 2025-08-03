@@ -255,39 +255,42 @@ StockAction SMA_Eval(std::vector<std::string> data, std::string symbol) {
     return HOLD;
 }
 
-StockAction RSI_Eval(std::vector<std::string> data, std::string symbol, int period) {
-    std::shared_ptr<std::vector<float>> closers = closing_prices(period ,data);
+StockAction RSI_Eval(std::vector<std::string> data, std::string symbol,
+                     int period) {
+    std::shared_ptr<std::vector<float>> closers = closing_prices(period, data);
     std::vector<float> gains, losses;
-    for(int i = 1; i < closers->size(); i++){
-        if(closers->at(i) > closers->at(i-1)){
+    for (int i = 1; i < closers->size(); i++) {
+        if (closers->at(i) > closers->at(i - 1)) {
             // gained
-            gains.push_back(closers->at(i) - closers->at(i-1));
-        }
-        else if(closers->at(i) < closers->at(i-1)){
+            gains.push_back(closers->at(i) - closers->at(i - 1));
+        } else if (closers->at(i) < closers->at(i - 1)) {
             // lost
-            losses.push_back(closers->at(i-1) - closers->at(i));
+            losses.push_back(closers->at(i - 1) - closers->at(i));
         }
     }
     float sum = 0;
-    for(auto gain : gains){
+    for (auto gain : gains) {
         sum += gain;
     }
     float avg_gains = sum / period;
     sum = 0;
-    for(auto loss : losses){
+    for (auto loss : losses) {
         sum += loss;
     }
     float avg_loss = sum / period;
 
     float RSI = 100 - 100 / (1 + avg_gains / avg_loss);
+    std::string log_msg = "RSI: " + std::to_string(RSI) +
+                          "\nAverage Gain: " + std::to_string(avg_gains) +
+                          "\nAverage Loss: " + std::to_string(avg_loss);
+    logStock("Checking RSI", symbol, log_msg);
 
-    if(RSI > 70){
+    if (RSI > 70) {
         return SELL;
-    }else if(RSI < 30){
+    } else if (RSI < 30) {
         return BUY;
     }
     return HOLD;
-
 }
 
 // TODO: maybe add in a majority vote with some other indicators like RSI and
