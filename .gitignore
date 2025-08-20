@@ -3,4 +3,5 @@ build
 .poorenv
 clion-build
 .idea
+.*
 

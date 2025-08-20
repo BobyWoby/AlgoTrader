@@ -11,12 +11,10 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ssl/context.hpp>
 #include <chrono>
-#include <cmath>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <locale>
 #include <map>
 #include <string>
 #include <thread>
@@ -160,6 +158,41 @@ void fetch_data(std::vector<std::string>& res, const std::string symbol,
         std::cout << escape_string(jsondata) << "\n";
     }
 }
+std::shared_ptr<std::vector<float>> day_closes(int days,
+                                               std::vector<std::string> data) {
+    std::shared_ptr<std::vector<float>> out =
+        std::make_shared<std::vector<float>>();
+
+    int day_changes = 0;
+    char day_tracker = ' ';
+
+    for (auto& file : data) {
+        rapidjson::Document doc;
+        doc.Parse(file.c_str());
+        if (doc["bars"].IsArray()) {
+            const rapidjson::Value& bars = doc["bars"];
+
+            for (rapidjson::SizeType i = 0; i < bars.Size(); i++) {
+                // iterates through each bar
+                if (!bars[i].IsObject() || !bars[i]["t"].IsString() ||
+                        !bars[i]["t"].IsString()) {
+                    std::cout << "i: " << i << ", file:  " << file << "\n";
+                }
+                const rapidjson::Value& tmp1 = bars[i];
+                char day = tmp1["t"].GetString()[9];
+                if (day != day_tracker) {
+                    out->push_back(bars[i]["c"].GetFloat());
+                    day_tracker = day;
+                    day_changes++;
+                }
+                if (day_changes >= days) {
+                    break;
+                }
+            }
+        }
+    }
+    return out;
+}
 
 std::shared_ptr<std::vector<float>> closing_prices(
     int days, std::vector<std::string> data) {
@@ -257,7 +290,7 @@ StockAction SMA_Eval(std::vector<std::string> data, std::string symbol) {
 
 StockAction RSI_Eval(std::vector<std::string> data, std::string symbol,
                      int period) {
-    std::shared_ptr<std::vector<float>> closers = closing_prices(period, data);
+    std::shared_ptr<std::vector<float>> closers = day_closes(period, data);
     std::vector<float> gains, losses;
     for (int i = 1; i < closers->size(); i++) {
         if (closers->at(i) > closers->at(i - 1)) {
